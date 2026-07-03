@@ -1,10 +1,11 @@
 #!/bin/bash
 
 ################################################################################
-# Massage Bot VPS Installation Script
+# Massage Bot VPS Installation Script (FIXED VERSION)
 # Интерактивная установка Massage Bot на Linux VPS с Docker Compose
 # Автор: nxksxd
 # Дата: 2026-07-03
+# Версия: 1.1 (Fixed - no unbound variable errors)
 ################################################################################
 
 set -euo pipefail
@@ -141,12 +142,6 @@ install_docker_official() {
     if command -v docker &> /dev/null; then
         success "Docker установлен: $(docker --version)"
         
-        # Добавляем текущего пользователя в группу docker если это не root
-        if [[ $EUID -ne 0 ]]; then
-            usermod -aG docker $USER
-            info "Пользователь $USER добавлен в группу docker"
-        fi
-        
         # Запускаем Docker daemon
         systemctl start docker
         systemctl enable docker
@@ -157,14 +152,14 @@ install_docker_official() {
 }
 
 ################################################################################
-# ИНТЕРАКТИВНЫЙ ВВОД КОНФИГУРАЦИИ
+# ИНТЕРАКТИВНЫЙ ВВОД КОНФИГУРАЦИИ - FIXED VERSION (NO UNBOUND VARIABLES)
 ################################################################################
 
 prompt_input() {
     local prompt="$1"
     local default="$2"
     local var_name="$3"
-    local response
+    local response=""
     
     if [[ -n "$default" ]]; then
         read -p "$(echo -e ${BLUE})$prompt${NC} [${YELLOW}$default${NC}]: " response
@@ -187,7 +182,7 @@ prompt_secret() {
     local response=""
     
     while [[ -z "$response" ]]; do
-        read -s -p "$(echo -e ${BLUE})$prompt${NC}: " response || response=""
+        read -s -p "$(echo -e ${BLUE})$prompt${NC}: " response || true
         echo
         if [[ -z "$response" ]]; then
             echo -e "${RED}Это поле обязательно!${NC}"
@@ -513,7 +508,7 @@ main() {
     echo
     echo -e "${BLUE}╔══════════════════════════════════════════════════════╗${NC}"
     echo -e "${BLUE}║      MASSAGE BOT VPS INSTALLATION SCRIPT             ║${NC}"
-    echo -e "${BLUE}║            Версия 1.0 | 2026-07-03                  ║${NC}"
+    echo -e "${BLUE}║            Версия 1.1 | 2026-07-03 (FIXED)           ║${NC}"
     echo -e "${BLUE}╚══════════════════════════════════════════════════════╝${NC}"
     echo
     
