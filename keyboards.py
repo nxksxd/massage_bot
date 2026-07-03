@@ -15,9 +15,10 @@ from callbacks import (
 
 def get_start_keyboard() -> InlineKeyboardMarkup:
     """Стартовая кнопка - Записаться на массаж"""
+    from aiogram.types import InlineKeyboardButton
     builder = InlineKeyboardBuilder()
     builder.add(
-        BookingAction(action="start").pack()
+        InlineKeyboardButton(text="📅 Записаться на массаж", callback_data=BookingAction(action="start").pack())
     )
     return builder.as_markup()
 
