@@ -70,25 +70,26 @@ check_os() {
 check_dependencies() {
     log "Проверяю зависимости..."
     
-    local missing_deps=()
+    local missing_docker=false
     
     # Проверяем git
     if ! command -v git &> /dev/null; then
-        missing_deps+=("git")
-    else
-        success "git найден: $(git --version)"
+        log "git не найден, устанавливаю..."
+        apt-get update || error "Не удалось обновить списки пакетов"
+        apt-get install -y git || error "Не удалось установить git"
     fi
+    success "git найден: $(git --version)"
     
     # Проверяем Docker
     if ! command -v docker &> /dev/null; then
-        missing_deps+=("docker")
+        missing_docker=true
     else
         success "docker найден: $(docker --version)"
     fi
     
     # Проверяем Docker Compose
     if ! docker compose version &> /dev/null 2>&1 && ! command -v docker-compose &> /dev/null; then
-        missing_deps+=("docker-compose")
+        missing_docker=true
     else
         if docker compose version &> /dev/null 2>&1; then
             success "docker compose найден (встроено в Docker)"
@@ -99,19 +100,59 @@ check_dependencies() {
     
     # Проверяем curl
     if ! command -v curl &> /dev/null; then
-        missing_deps+=("curl")
-    else
-        success "curl найден"
-    fi
-    
-    # Если есть отсутствующие зависимости
-    if [[ ${#missing_deps[@]} -gt 0 ]]; then
-        warning "Отсутствуют зависимости: ${missing_deps[*]}"
-        log "Устанавливаю недостающие зависимости..."
-        
+        log "curl не найден, устанавливаю..."
         apt-get update || error "Не удалось обновить списки пакетов"
-        apt-get install -y "${missing_deps[@]}" || error "Не удалось установить зависимости"
-        success "Зависимости установлены"
+        apt-get install -y curl || error "Не удалось установить curl"
+    fi
+    success "curl найден"
+    
+    # Если Docker не установлен, устанавливаем из официального репозитория
+    if [[ "$missing_docker" == "true" ]]; then
+        install_docker_official
+    fi
+}
+
+install_docker_official() {
+    log "Устанавливаю Docker из официального репозитория..."
+    
+    # Удаляем старые версии Docker если они есть
+    apt-get remove -y docker docker.io docker-doc docker-compose podman-docker containerd runc 2>/dev/null || true
+    
+    # Устанавливаем зависимости для добавления репозитория
+    apt-get update
+    apt-get install -y ca-certificates curl gnupg lsb-release
+    
+    # Добавляем GPG ключ Docker
+    info "Добавляю GPG ключ Docker..."
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+    
+    # Добавляем Docker репозиторий
+    info "Добавляю Docker репозиторий..."
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | \
+        tee /etc/apt/sources.list.d/docker.list > /dev/null
+    
+    # Обновляем список пакетов и устанавливаем Docker
+    log "Устанавливаю Docker Engine и Docker Compose..."
+    apt-get update
+    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || \
+        error "Не удалось установить Docker из официального репозитория"
+    
+    # Проверяем успешность установки
+    if command -v docker &> /dev/null; then
+        success "Docker установлен: $(docker --version)"
+        
+        # Добавляем текущего пользователя в группу docker если это не root
+        if [[ $EUID -ne 0 ]]; then
+            usermod -aG docker $USER
+            info "Пользователь $USER добавлен в группу docker"
+        fi
+        
+        # Запускаем Docker daemon
+        systemctl start docker
+        systemctl enable docker
+        success "Docker daemon запущен и включен в автозагрузку"
+    else
+        error "Не удалось установить Docker"
     fi
 }
 
