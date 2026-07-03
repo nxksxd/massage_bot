@@ -351,9 +351,10 @@ async def show_confirmation(event, state: FSMContext):
 
 @router.callback_query(BookingForm.confirm, BookingAction.filter(F.action == "confirm"))
 async def confirm_booking(callback: CallbackQuery, state: FSMContext):
-    """Подтверждение записи — сохраняем в Google Sheets"""
+    """Подтверждение записи — сохраняем в Google Sheets и уведомляем массажиста"""
     from google_sheets import save_booking
-
+    from config import MASSEUR_ID
+    
     await delete_previous_messages(callback.bot, state, callback.message.chat.id)
     await delete_message_safe(callback.bot, callback.message.chat.id, callback.message.message_id)
 
@@ -365,28 +366,54 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext):
     record_number = await save_booking(data)
 
     if record_number:
-        sent = await callback.message.answer(
+        # Сообщение пользователю об успешной записи
+        user_message = await callback.message.answer(
             text=(
-                f"✅ <b>Запись успешно создана!</b>\n\n"
-                f"📋 <b>Номер записи:</b> #{record_number}\n\n"
-                f"Массажист получит уведомление и подтвердит запись.\n"
+                f"✅ <b>Запись успешно создана!</b>\\n\\n"
+                f"📋 <b>Номер записи:</b> #{record_number}\\n\\n"
+                f"Массажист получит уведомление и подтвердит запись.\\n"
                 f"Вы получите уведомление когда запись будет подтверждена."
             ),
             parse_mode="HTML",
             reply_markup=get_start_keyboard()
         )
+        
+        # Уведомление массажисту (админу)
+        try:
+            masseur_text = (
+                f"📋 <b>Новая запись #{record_number}</b>\\n\\n"
+                f"👤 <b>Родитель:</b> {data.get('parent_name', 'N/A')}\\n"
+                f"👶 <b>Ребенок:</b> {data.get('child_name', 'N/A')}\\n"
+                f"🎂 <b>Возраст:</b> {data.get('child_age', 'N/A')}\\n"
+                f"💆 <b>Массаж:</b> {data.get('massage_type', 'N/A')}\\n"
+                f"📅 <b>Дата:</b> {data.get('date', 'N/A')}\\n"
+                f"🕐 <b>Время:</b> {data.get('time', 'N/A')}\\n"
+                f"💬 <b>Комментарий:</b> {data.get('comment', 'Нет')}\\n\\n"
+                f"👤 <b>Клиент:</b> @{data.get('username', 'anonymous')} (ID: {data.get('user_id')})"
+            )
+            await callback.bot.send_message(
+                chat_id=MASSEUR_ID,
+                text=masseur_text,
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            import logging
+            logging.error(f"❌ Не удалось отправить уведомление массажисту: {e}")
+        
+        await state.clear()
+        await state.update_data(messages_to_delete=[user_message.message_id])
     else:
-        sent = await callback.message.answer(
+        error_message = await callback.message.answer(
             text=(
-                "❌ <b>Ошибка при сохранении записи</b>\n\n"
+                "❌ <b>Ошибка при сохранении записи</b>\\n\\n"
                 "Попробуйте позже или обратитесь к массажисту напрямую."
             ),
             parse_mode="HTML",
             reply_markup=get_start_keyboard()
         )
+        await state.clear()
+        await state.update_data(messages_to_delete=[error_message.message_id])
 
-    await state.clear()
-    await state.update_data(messages_to_delete=[sent.message_id])
     await callback.answer()
 
 
