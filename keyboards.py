@@ -1,17 +1,23 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+"""
+Клавиатуры бота — все inline-кнопки с CallbackData фабриками.
+"""
+from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from booking_rules import MASSAGE_TYPE_OPTIONS
+from callbacks import (
+    BookingAction,
+    EditField,
+    MasseurAction,
+    MasseurEditField,
+)
 
 
 def get_start_keyboard() -> InlineKeyboardMarkup:
     """Стартовая кнопка - Записаться на массаж"""
     builder = InlineKeyboardBuilder()
     builder.add(
-        InlineKeyboardButton(
-            text="💆 Записаться на массаж",
-            callback_data="start_booking"
-        )
+        BookingAction(action="start").pack()
     )
     return builder.as_markup()
 
@@ -21,8 +27,10 @@ def get_massage_types_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
     for callback_data, button_text, _ in MASSAGE_TYPE_OPTIONS:
-        builder.add(InlineKeyboardButton(text=button_text, callback_data=callback_data))
-    
+        builder.add(
+            InlineKeyboardButton(text=button_text, callback_data=callback_data)
+        )
+
     # Располагаем по 1 кнопке в ряд
     builder.adjust(1)
     return builder.as_markup()
@@ -32,30 +40,32 @@ def get_confirm_keyboard() -> InlineKeyboardMarkup:
     """Кнопки подтверждения анкеты"""
     builder = InlineKeyboardBuilder()
     builder.add(
-        InlineKeyboardButton(text="✅ Всё верно!", callback_data="confirm_yes"),
-        InlineKeyboardButton(text="✏️ Внести изменения", callback_data="confirm_edit")
+        InlineKeyboardButton(text="✅ Всё верно!", callback_data=BookingAction(action="confirm").pack()),
+        InlineKeyboardButton(text="✏️ Внести изменения", callback_data=BookingAction(action="edit").pack())
     )
-    builder.adjust(1)  # По одной кнопке в ряд
+    builder.adjust(1)
     return builder.as_markup()
 
 
 def get_edit_keyboard() -> InlineKeyboardMarkup:
     """Кнопки для выбора что именно редактировать"""
     builder = InlineKeyboardBuilder()
-    
+
     fields = [
-        ("👤 Изменить имя родителя", "edit_parent_name"),
-        ("👶 Изменить имя ребенка", "edit_child_name"),
-        ("🎂 Изменить возраст ребенка", "edit_child_age"),
-        ("💆 Изменить вид массажа", "edit_massage_type"),
-        ("📅 Изменить дату", "edit_date"),
-        ("🕐 Изменить время", "edit_time"),
-        ("💬 Изменить комментарий", "edit_comment"),
+        ("👤 Изменить имя родителя", "parent_name"),
+        ("👶 Изменить имя ребенка", "child_name"),
+        ("🎂 Изменить возраст ребенка", "child_age"),
+        ("💆 Изменить вид массажа", "massage_type"),
+        ("📅 Изменить дату", "date"),
+        ("🕐 Изменить время", "time"),
+        ("💬 Изменить комментарий", "comment"),
     ]
-    
-    for text, callback in fields:
-        builder.add(InlineKeyboardButton(text=text, callback_data=callback))
-    
+
+    for text, field in fields:
+        builder.add(
+            InlineKeyboardButton(text=text, callback_data=EditField(field=field).pack())
+    )
+
     builder.adjust(1)
     return builder.as_markup()
 
@@ -64,7 +74,7 @@ def get_skip_keyboard() -> InlineKeyboardMarkup:
     """Кнопка пропустить (для комментария)"""
     builder = InlineKeyboardBuilder()
     builder.add(
-        InlineKeyboardButton(text="⏭ Пропустить", callback_data="skip_comment")
+        InlineKeyboardButton(text="⏭ Пропустить", callback_data=BookingAction(action="skip").pack())
     )
     return builder.as_markup()
 
@@ -73,46 +83,51 @@ def get_cancel_keyboard() -> InlineKeyboardMarkup:
     """Кнопка отмены"""
     builder = InlineKeyboardBuilder()
     builder.add(
-        InlineKeyboardButton(text="❌ Отменить запись", callback_data="cancel_booking")
+        InlineKeyboardButton(text="❌ Отменить запись", callback_data=BookingAction(action="cancel").pack())
     )
     return builder.as_markup()
 
 
-def get_masseur_action_keyboard(booking_id: str) -> InlineKeyboardMarkup:
+def get_masseur_action_keyboard(booking_id: int) -> InlineKeyboardMarkup:
     """Кнопки для массажиста: Подтвердить или Редактировать запись"""
     builder = InlineKeyboardBuilder()
     builder.add(
         InlineKeyboardButton(
             text="✅ Подтвердить запись",
-            callback_data=f"masseur_confirm_{booking_id}"
+            callback_data=MasseurAction(action="confirm", record_id=booking_id).pack()
         )
     )
     builder.add(
         InlineKeyboardButton(
             text="✏️ Редактировать запись",
-            callback_data=f"masseur_edit_{booking_id}"
+            callback_data=MasseurAction(action="edit", record_id=booking_id).pack()
         )
     )
     builder.adjust(1)
     return builder.as_markup()
 
 
-def get_masseur_edit_keyboard(booking_id: str) -> InlineKeyboardMarkup:
+def get_masseur_edit_keyboard(booking_id: int) -> InlineKeyboardMarkup:
     """Кнопки для выбора что редактировать (для массажиста)"""
     builder = InlineKeyboardBuilder()
-    
+
     fields = [
-        ("👤 Имя родителя", f"medit_parent_name_{booking_id}"),
-        ("👶 Имя ребенка", f"medit_child_name_{booking_id}"),
-        ("🎂 Возраст ребенка", f"medit_child_age_{booking_id}"),
-        ("💆 Вид массажа", f"medit_massage_type_{booking_id}"),
-        ("📅 Дата и время", f"medit_date_{booking_id}"),
-        ("💬 Комментарий", f"medit_comment_{booking_id}"),
-        ("✅ Завершить редактирование", f"medit_done_{booking_id}"),
+        ("👤 Имя родителя", "parent_name"),
+        ("👶 Имя ребенка", "child_name"),
+        ("🎂 Возраст ребенка", "child_age"),
+        ("💆 Вид массажа", "massage_type"),
+        ("📅 Дата и время", "date_time"),
+        ("💬 Комментарий", "comment"),
+        ("✅ Завершить редактирование", "done"),
     ]
-    
-    for text, callback in fields:
-        builder.add(InlineKeyboardButton(text=text, callback_data=callback))
-    
+
+    for text, field in fields:
+        builder.add(
+            InlineKeyboardButton(
+                text=text,
+                callback_data=MasseurEditField(field=field, record_id=booking_id).pack()
+            )
+    )
+
     builder.adjust(1)
     return builder.as_markup()

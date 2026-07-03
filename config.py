@@ -21,6 +21,7 @@ if not BOT_TOKEN:
 # ============================================================
 CREDENTIALS_FILE = os.getenv("CREDENTIALS_FILE", "credentials.json")
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "")
+GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "Записи")  # Имя листа в таблице
 
 if not SPREADSHEET_ID:
     raise ValueError("❌ SPREADSHEET_ID не установлен! Добавьте его в .env файл")
@@ -39,6 +40,15 @@ GOOGLE_SHEETS_TIMEOUT = int(os.getenv("GOOGLE_SHEETS_TIMEOUT", "30"))
 
 # Базовая задержка между retry попытками (сек)
 GOOGLE_SHEETS_RETRY_DELAY = float(os.getenv("GOOGLE_SHEETS_RETRY_DELAY", "1"))
+
+# ============================================================
+# REDIS / FSM STORAGE
+# ============================================================
+# URL для подключения к Redis (например: redis://localhost:6379/0)
+REDIS_URL = os.getenv("REDIS_URL", "")
+
+# Использовать RedisStorage вместо MemoryStorage (True/False)
+USE_REDIS_STORAGE = os.getenv("USE_REDIS_STORAGE", "false").lower() == "true"
 
 # ============================================================
 # ЛОГИРОВАНИЕ

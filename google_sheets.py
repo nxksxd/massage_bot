@@ -1,10 +1,9 @@
 """
 Оптимизированный модуль для работы с Google Sheets
-Включает: кеширование, асинхронность, retry логика, батчирование обновлений
+Включает: кеширование, асинхронность, retry логику, батчирование обновлений
 """
 import asyncio
 import logging
-import threading
 import time
 import traceback
 from typing import Optional
@@ -23,6 +22,7 @@ from booking_rules import (
 from config import (
     CREDENTIALS_FILE,
     SPREADSHEET_ID,
+    GOOGLE_SHEET_NAME,
     GOOGLE_SHEET_CACHE_TTL,
     GOOGLE_SHEETS_MAX_RETRIES,
     GOOGLE_SHEETS_TIMEOUT,
@@ -44,40 +44,45 @@ SCOPES = [
 
 class SheetCache:
     """Кеш для Google Sheet подключения с автоматическим истечением"""
-    
+
     def __init__(self, ttl_seconds: int = GOOGLE_SHEET_CACHE_TTL):
         self.ttl = ttl_seconds
         self.sheet = None
         self.timestamp = None
-    
+
     def is_valid(self) -> bool:
         """Проверяем валиден ли кеш"""
         if self.sheet is None or self.timestamp is None:
             return False
         elapsed = time.time() - self.timestamp
         return elapsed < self.ttl
-    
+
     def get(self):
         """Получить кеш если валиден"""
         if self.is_valid():
             logger.debug(f"📦 Google Sheet из кеша (осталось {self.ttl - (time.time() - self.timestamp):.0f}сек)")
             return self.sheet
         return None
-    
+
     def set(self, sheet):
         """Установить новый кеш"""
         self.sheet = sheet
         self.timestamp = time.time()
         logger.info(f"✅ Google Sheet подключение закешировано (TTL: {self.ttl}сек)")
 
+    def invalidate(self):
+        """Принудительно инвалидировать кеш"""
+        self.sheet = None
+        self.timestamp = None
+        logger.info("🗑️ Кеш Google Sheet инвалидирован")
+
 
 # Глобальный кеш
 _sheet_cache = SheetCache()
-_save_booking_lock = threading.Lock()
 
 
 # ============================================================
-# ВАЛИДАЦИЯ ДАННЫХ
+# ВАЛИДАЦИЯ ДАННЫХ (обёртки над booking_rules для логирования)
 # ============================================================
 
 def validate_name(name: str, field_name: str = "Имя") -> bool:
@@ -118,7 +123,6 @@ def validate_time(time_str: str) -> bool:
     if not is_valid:
         logger.warning(f"❌ Время должно быть в формате ЧЧ:ММ, получено: {time_str}")
         return False
-
     return True
 
 
@@ -132,16 +136,16 @@ def validate_booking_data(booking_data: dict) -> bool:
         ('date', validate_date),
         ('time', validate_time),
     ]
-    
+
     for field, validator in required_fields:
         if field not in booking_data:
             logger.warning(f"❌ Отсутствует поле: {field}")
             return False
-        
+
         if not validator(booking_data[field]):
             logger.warning(f"❌ Ошибка валидации поля: {field}")
             return False
-    
+
     return True
 
 
@@ -155,7 +159,7 @@ def _get_google_sheet_sync():
     cached_sheet = _sheet_cache.get()
     if cached_sheet is not None:
         return cached_sheet
-    
+
     # Подключаемся к Google Sheets
     logger.info("🔗 Подключение к Google Sheets...")
     creds = Credentials.from_service_account_file(
@@ -164,18 +168,24 @@ def _get_google_sheet_sync():
     )
     client = gspread.authorize(creds)
     spreadsheet = client.open_by_key(SPREADSHEET_ID)
-    sheet = spreadsheet.sheet1
-    
+
+    # Используем настроенное имя листа вместо sheet1
+    try:
+        sheet = spreadsheet.worksheet(GOOGLE_SHEET_NAME)
+    except gspread.WorksheetNotFound:
+        logger.warning(f"⚠️ Лист '{GOOGLE_SHEET_NAME}' не найден, используем первый лист")
+        sheet = spreadsheet.sheet1
+
     # Кешируем подключение
     _sheet_cache.set(sheet)
-    
+
     return sheet
 
 
 async def get_google_sheet():
     """Асинхронное получение Google Sheet с retry логикой"""
     last_exception = None
-    
+
     for attempt in range(GOOGLE_SHEETS_MAX_RETRIES):
         try:
             return await asyncio.wait_for(
@@ -188,14 +198,29 @@ async def get_google_sheet():
         except Exception as e:
             last_exception = e
             logger.warning(f"⚠️ Попытка {attempt + 1}/{GOOGLE_SHEETS_MAX_RETRIES} ошибка: {e}")
-        
+
         if attempt == GOOGLE_SHEETS_MAX_RETRIES - 1:
             logger.error(f"❌ Все {GOOGLE_SHEETS_MAX_RETRIES} попыток исчерпаны")
             raise last_exception
-        
+
         delay = GOOGLE_SHEETS_RETRY_DELAY * (2 ** attempt)
         logger.debug(f"⏳ Ожидание {delay:.1f}сек перед повтором...")
         await asyncio.sleep(delay)
+
+    return None
+
+
+async def init_google_sheets() -> bool:
+    """Инициализация Google Sheets при запуске бота (проверка подключения)"""
+    try:
+        sheet = await get_google_sheet()
+        if sheet:
+            logger.info(f"✅ Google Sheets успешно инициализирована (лист: {sheet.title})")
+            return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка инициализации Google Sheets: {e}")
+        traceback.print_exc()
+    return False
 
 
 # ============================================================
@@ -206,9 +231,9 @@ def get_age_word(number: int, word_forms: tuple) -> str:
     """Правильная форма слова в зависимости от числа"""
     if 11 <= number % 100 <= 19:
         return word_forms[2]
-    
+
     last_digit = number % 10
-    
+
     if last_digit == 1:
         return word_forms[0]
     elif 2 <= last_digit <= 4:
@@ -220,7 +245,7 @@ def get_age_word(number: int, word_forms: tuple) -> str:
 def calculate_age(birth_date_str: str) -> str:
     """
     Расчет возраста по дате рождения (формат ДД.ММ.ГГГГ)
-    
+
     Возвращает строку вида:
     - 'ДД.ММ.ГГГГ (5 месяцев)'
     - 'ДД.ММ.ГГГГ (1 год)'
@@ -229,13 +254,13 @@ def calculate_age(birth_date_str: str) -> str:
     try:
         birth_date = datetime.strptime(birth_date_str, DATE_FORMAT)
         today = datetime.today()
-        
+
         # Считаем полные года
         years = today.year - birth_date.year
         birthday_this_year = birth_date.replace(year=today.year)
         if today < birthday_this_year:
             years -= 1
-        
+
         # Считаем полные месяцы сверх полных лет
         if years >= 0:
             try:
@@ -244,16 +269,16 @@ def calculate_age(birth_date_str: str) -> str:
                 last_birthday = birth_date.replace(year=birth_date.year + years, day=28)
         else:
             last_birthday = birth_date
-        
+
         months = (today.year - last_birthday.year) * 12
         months += today.month - last_birthday.month
-        
+
         if today.day < last_birthday.day:
             months -= 1
-        
+
         if months < 0:
             months = 0
-        
+
         # Формируем строку возраста
         if years == 0 and months == 0:
             age_str = "меньше месяца"
@@ -267,9 +292,9 @@ def calculate_age(birth_date_str: str) -> str:
             year_word = get_age_word(years, ("год", "года", "лет"))
             month_word = get_age_word(months, ("месяц", "месяца", "месяцев"))
             age_str = f"{years} {year_word} {months} {month_word}"
-        
+
         return f"{birth_date_str} ({age_str})"
-    
+
     except ValueError:
         return birth_date_str
 
@@ -279,7 +304,10 @@ def calculate_age(birth_date_str: str) -> str:
 # ============================================================
 
 def _save_booking_sync(booking_data: dict) -> Optional[int]:
-    """Синхронная функция сохранения записи"""
+    """
+    Синхронная функция сохранения записи.
+    Возвращает номер записи или None при ошибке.
+    """
     # Валидируем данные
     if not validate_booking_data(booking_data):
         logger.error(
@@ -287,7 +315,7 @@ def _save_booking_sync(booking_data: dict) -> Optional[int]:
             sorted(booking_data.keys()),
         )
         return None
-    
+
     sheet = _sheet_cache.get()
     if sheet is None:
         # Если кеш пуст, получаем новое подключение
@@ -297,55 +325,58 @@ def _save_booking_sync(booking_data: dict) -> Optional[int]:
         )
         client = gspread.authorize(creds)
         spreadsheet = client.open_by_key(SPREADSHEET_ID)
-        sheet = spreadsheet.sheet1
+        try:
+            sheet = spreadsheet.worksheet(GOOGLE_SHEET_NAME)
+        except gspread.WorksheetNotFound:
+            sheet = spreadsheet.sheet1
         _sheet_cache.set(sheet)
-    
+
     try:
-        with _save_booking_lock:
-            all_values = sheet.get_all_values()
+        all_values = sheet.get_all_values()
 
-            max_record_number = 0
-            for row in all_values[1:]:
-                if row and row[0].isdigit():
-                    try:
-                        record_num = int(row[0])
-                        max_record_number = max(max_record_number, record_num)
-                    except ValueError:
-                        pass
+        # Находим максимальный номер записи (колонка A)
+        max_record_number = 0
+        for row in all_values[1:]:  # пропускаем заголовок
+            if row and row[0].isdigit():
+                try:
+                    record_num = int(row[0])
+                    max_record_number = max(max_record_number, record_num)
+                except ValueError:
+                    pass
 
-            next_record_number = max_record_number + 1
+        next_record_number = max_record_number + 1
 
-            booking_datetime = datetime.now().strftime("%d.%m.%Y %H:%M")
-            birth_date = booking_data.get('child_age', '')
-            age_with_date = calculate_age(birth_date)
+        booking_datetime = datetime.now().strftime("%d.%m.%Y %H:%M")
+        birth_date = booking_data.get('child_age', '')
+        age_with_date = calculate_age(birth_date)
 
-            user_id = booking_data.get('user_id', '')
-            username = booking_data.get('username', '')
+        user_id = booking_data.get('user_id', '')
+        username = booking_data.get('username', '')
 
-            if username:
-                client_link = f"https://t.me/{username}"
-            else:
-                client_link = f"tg://user?id={user_id}"
+        if username:
+            client_link = f"https://t.me/{username}"
+        else:
+            client_link = f"tg://user?id={user_id}"
 
-            row = [
-                str(next_record_number),
-                booking_datetime,
-                normalize_name(booking_data.get('parent_name', '')),
-                normalize_name(booking_data.get('child_name', '')),
-                age_with_date,
-                booking_data.get('massage_type', ''),
-                booking_data.get('date', ''),
-                booking_data.get('time', ''),
-                booking_data.get('comment', ''),
-                str(user_id),
-                client_link
-            ]
+        row = [
+            str(next_record_number),
+            booking_datetime,
+            normalize_name(booking_data.get('parent_name', '')),
+            normalize_name(booking_data.get('child_name', '')),
+            age_with_date,
+            booking_data.get('massage_type', ''),
+            booking_data.get('date', ''),
+            booking_data.get('time', ''),
+            booking_data.get('comment', ''),
+            str(user_id),
+            client_link
+        ]
 
-            sheet.append_row(row)
+        sheet.append_row(row)
 
         logger.info(f"✅ Запись #{next_record_number} успешно сохранена")
         return next_record_number
-    
+
     except Exception as e:
         logger.error(f"❌ Ошибка при сохранении записи: {e}")
         traceback.print_exc()
@@ -355,7 +386,7 @@ def _save_booking_sync(booking_data: dict) -> Optional[int]:
 async def save_booking(booking_data: dict) -> Optional[int]:
     """Асинхронное сохранение записи с retry логикой"""
     last_exception = None
-    
+
     for attempt in range(GOOGLE_SHEETS_MAX_RETRIES):
         try:
             return await asyncio.wait_for(
@@ -368,15 +399,15 @@ async def save_booking(booking_data: dict) -> Optional[int]:
         except Exception as e:
             last_exception = e
             logger.warning(f"⚠️ Попытка {attempt + 1}/{GOOGLE_SHEETS_MAX_RETRIES} ошибка: {e}")
-        
+
         if attempt == GOOGLE_SHEETS_MAX_RETRIES - 1:
             logger.error(f"❌ Все {GOOGLE_SHEETS_MAX_RETRIES} попыток исчерпаны")
             return None
-        
+
         delay = GOOGLE_SHEETS_RETRY_DELAY * (2 ** attempt)
         logger.debug(f"⏳ Ожидание {delay:.1f}сек перед повтором...")
         await asyncio.sleep(delay)
-    
+
     return None
 
 
@@ -390,25 +421,28 @@ def _update_booking_sync(record_number: int, updated_data: dict) -> bool:
         )
         client = gspread.authorize(creds)
         spreadsheet = client.open_by_key(SPREADSHEET_ID)
-        sheet = spreadsheet.sheet1
+        try:
+            sheet = spreadsheet.worksheet(GOOGLE_SHEET_NAME)
+        except gspread.WorksheetNotFound:
+            sheet = spreadsheet.sheet1
         _sheet_cache.set(sheet)
-    
+
     try:
         all_values = sheet.get_all_values()
-        
+
         # Ищем строку по номеру записи
         row_number = None
         for i, row in enumerate(all_values, start=1):
             if i > 1 and len(row) > 0 and row[0] == str(record_number):
                 row_number = i
                 break
-        
+
         if row_number is None:
             logger.warning(f"⚠️ Запись #{record_number} не найдена")
             return False
-        
+
         logger.info(f"✏️ Обновление записи #{record_number} (строка {row_number})")
-        
+
         # Маппинг полей на столбцы
         field_to_column = {
             'parent_name': 3,      # C
@@ -419,7 +453,7 @@ def _update_booking_sync(record_number: int, updated_data: dict) -> bool:
             'time': 8,             # H
             'comment': 9           # I
         }
-        
+
         # БАТЧИРОВАНИЕ: Собираем все обновления и выполняем в одном batch_update
         updates = []
         for field, value in updated_data.items():
@@ -456,14 +490,14 @@ def _update_booking_sync(record_number: int, updated_data: dict) -> bool:
                     'range': cell,
                     'values': [[value]]
                 })
-        
+
         # Выполняем все обновления одним batch_update (10x быстрее!)
         if updates:
             sheet.batch_update(updates)
             logger.info(f"✅ Запись #{record_number} успешно обновлена ({len(updates)} полей)")
-        
+
         return True
-    
+
     except Exception as e:
         logger.error(f"❌ Ошибка при обновлении записи: {e}")
         traceback.print_exc()
@@ -473,7 +507,7 @@ def _update_booking_sync(record_number: int, updated_data: dict) -> bool:
 async def update_booking(record_number: int, updated_data: dict) -> bool:
     """Асинхронное обновление записи с retry логикой"""
     last_exception = None
-    
+
     for attempt in range(GOOGLE_SHEETS_MAX_RETRIES):
         try:
             return await asyncio.wait_for(
@@ -486,15 +520,15 @@ async def update_booking(record_number: int, updated_data: dict) -> bool:
         except Exception as e:
             last_exception = e
             logger.warning(f"⚠️ Попытка {attempt + 1}/{GOOGLE_SHEETS_MAX_RETRIES} ошибка: {e}")
-        
+
         if attempt == GOOGLE_SHEETS_MAX_RETRIES - 1:
             logger.error(f"❌ Все {GOOGLE_SHEETS_MAX_RETRIES} попыток исчерпаны")
             return False
-        
+
         delay = GOOGLE_SHEETS_RETRY_DELAY * (2 ** attempt)
         logger.debug(f"⏳ Ожидание {delay:.1f}сек перед повтором...")
         await asyncio.sleep(delay)
-    
+
     return False
 
 
@@ -508,30 +542,33 @@ def _get_user_id_by_record_number_sync(record_number: int) -> Optional[int]:
         )
         client = gspread.authorize(creds)
         spreadsheet = client.open_by_key(SPREADSHEET_ID)
-        sheet = spreadsheet.sheet1
+        try:
+            sheet = spreadsheet.worksheet(GOOGLE_SHEET_NAME)
+        except gspread.WorksheetNotFound:
+            sheet = spreadsheet.sheet1
         _sheet_cache.set(sheet)
-    
+
     try:
         all_values = sheet.get_all_values()
-        
-        for row in all_values[1:]:
-            if len(row) >= 10 and row[0] == str(record_number):
-                user_id_str = row[9]
-                if user_id_str:
+
+        for row in all_values[1:]:  # пропускаем заголовок
+            if row and len(row) >= 10 and row[0] == str(record_number):
+                user_id_str = row[9]  # колонка J (user_id)
+                if user_id_str.isdigit():
                     return int(user_id_str)
-        
-        logger.warning(f"⚠️ Запись #{record_number} не найдена")
+                return None
         return None
-    
+
     except Exception as e:
         logger.error(f"❌ Ошибка при получении user_id: {e}")
+        traceback.print_exc()
         return None
 
 
 async def get_user_id_by_record_number(record_number: int) -> Optional[int]:
     """Асинхронное получение user_id по номеру записи с retry логикой"""
     last_exception = None
-    
+
     for attempt in range(GOOGLE_SHEETS_MAX_RETRIES):
         try:
             return await asyncio.wait_for(
@@ -544,30 +581,13 @@ async def get_user_id_by_record_number(record_number: int) -> Optional[int]:
         except Exception as e:
             last_exception = e
             logger.warning(f"⚠️ Попытка {attempt + 1}/{GOOGLE_SHEETS_MAX_RETRIES} ошибка: {e}")
-        
+
         if attempt == GOOGLE_SHEETS_MAX_RETRIES - 1:
             logger.error(f"❌ Все {GOOGLE_SHEETS_MAX_RETRIES} попыток исчерпаны")
             return None
-        
+
         delay = GOOGLE_SHEETS_RETRY_DELAY * (2 ** attempt)
         logger.debug(f"⏳ Ожидание {delay:.1f}сек перед повтором...")
         await asyncio.sleep(delay)
-    
+
     return None
-
-
-# ============================================================
-# ФУНКЦИЯ ИНИЦИАЛИЗАЦИИ (вызвать при запуске бота)
-# ============================================================
-
-async def init_google_sheets():
-    """Инициализация Google Sheets при запуске бота"""
-    try:
-        logger.info("🚀 Инициализация Google Sheets...")
-        sheet = await get_google_sheet()
-        logger.info(f"✅ Google Sheets успешно инициализирована ({sheet.title})")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Ошибка инициализации Google Sheets: {e}")
-        traceback.print_exc()
-        return False

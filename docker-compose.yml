@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: massage_bot_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: massage_bot
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - MASSEUR_ID=${MASSEUR_ID}
+      - CREDENTIALS_FILE=/app/credentials.json
+      - SPREADSHEET_ID=${SPREADSHEET_ID}
+      - GOOGLE_SHEET_NAME=${GOOGLE_SHEET_NAME}
+      - GOOGLE_SHEET_CACHE_TTL=${GOOGLE_SHEET_CACHE_TTL}
+      - GOOGLE_SHEETS_MAX_RETRIES=${GOOGLE_SHEETS_MAX_RETRIES}
+      - GOOGLE_SHEETS_TIMEOUT=${GOOGLE_SHEETS_TIMEOUT}
+      - GOOGLE_SHEETS_RETRY_DELAY=${GOOGLE_SHEETS_RETRY_DELAY}
+      - REDIS_URL=redis://redis:6379/0
+      - USE_REDIS_STORAGE=true
+      - LOG_LEVEL=${LOG_LEVEL}
+    volumes:
+      - ./credentials.json:/app/credentials.json:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  redis_data:
