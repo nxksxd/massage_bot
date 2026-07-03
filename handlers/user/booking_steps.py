@@ -312,7 +312,7 @@ async def process_comment(message: Message, state: FSMContext):
     await show_confirmation(message, state)
 
 
-@router.callback_query(BookingForm.comment, F.data == "skip_comment")
+@router.callback_query(BookingForm.comment, BookingAction.filter(F.action == "skip"))
 async def skip_comment(callback: CallbackQuery, state: FSMContext):
     await state.update_data(comment="")
     if await check_editing_and_proceed(callback, state):
