@@ -1,7 +1,7 @@
 """
 Клавиатуры бота — все inline-кнопки с CallbackData фабриками.
 """
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from booking_rules import MASSAGE_TYPE_OPTIONS
@@ -15,7 +15,6 @@ from callbacks import (
 
 def get_start_keyboard() -> InlineKeyboardMarkup:
     """Стартовая кнопка - Записаться на массаж"""
-    from aiogram.types import InlineKeyboardButton
     builder = InlineKeyboardBuilder()
     builder.add(
         InlineKeyboardButton(text="📅 Записаться на массаж", callback_data=BookingAction(action="start").pack())
