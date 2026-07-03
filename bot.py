@@ -101,7 +101,10 @@ async def main():
         await bot.session.close()
         # Закрываем Redis если использовался
         if hasattr(storage, 'redis') and storage.redis:
-            await storage.redis.close()
+            try:
+                await storage.redis.aclose()
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка при закрытии Redis: {e}")
 
 
 if __name__ == "__main__":
