@@ -184,10 +184,10 @@ prompt_input() {
 prompt_secret() {
     local prompt="$1"
     local var_name="$2"
-    local response
+    local response=""
     
     while [[ -z "$response" ]]; do
-        read -s -p "$(echo -e ${BLUE})$prompt${NC}: " response
+        read -s -p "$(echo -e ${BLUE})$prompt${NC}: " response || response=""
         echo
         if [[ -z "$response" ]]; then
             echo -e "${RED}Это поле обязательно!${NC}"
