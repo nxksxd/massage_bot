@@ -2,13 +2,24 @@
 
 Production-ready Telegram bot для управления записями на массаж с интеграцией Google Sheets, Redis, и полной синхронизацией.
 
-## 🚀 Быстрый старт (3 команды)
+## 🚀 Установка одной командой
+
+На чистом Linux VPS (Ubuntu 22.04 / 24.04, Debian) выполни:
 
 ```bash
-# На Linux VPS (Ubuntu/Debian)
-curl -fsSL https://raw.githubusercontent.com/nxksxd/massage_bot/main/scripts/install_vps.sh -o install.sh
-chmod +x install.sh
-sudo ./install.sh
+curl -fsSL https://raw.githubusercontent.com/nxksxd/massage_bot/main/scripts/install_vps.sh | sudo bash
+```
+
+Скрипт сам установит Docker + Docker Compose, интерактивно запросит параметры (BOT_TOKEN, MASSEUR_ID, SPREADSHEET_ID, credentials.json, Redis), соберёт контейнеры, создаст systemd-сервис `massage-bot` и запустит бота. Установка занимает ~2–3 минуты.
+
+> **Совет:** заранее подготовь **BOT_TOKEN** от [@BotFather](https://t.me/BotFather), свой **Telegram ID** (MASSEUR_ID), **SPREADSHEET_ID** из ссылки на Google-таблицу и файл **credentials.json** (Google Service Account с доступом к таблице).
+
+**Управление после установки:**
+
+```bash
+sudo systemctl status massage-bot     # статус
+sudo systemctl restart massage-bot    # перезапуск
+sudo journalctl -u massage-bot -f     # живые логи
 ```
 
 **Или локально для разработки:**

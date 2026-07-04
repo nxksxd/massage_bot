@@ -9,8 +9,10 @@ from config import MASSEUR_ID
 from states import MasseurActions
 from google_sheets import update_booking, get_user_id_by_record_number
 from keyboards import (
+    get_start_keyboard,
     get_masseur_action_keyboard,
     get_masseur_edit_keyboard,
+    get_cancel_keyboard,
 )
 from handlers.common import (
     delete_previous_messages,
@@ -83,7 +85,7 @@ async def masseur_edit(callback: CallbackQuery, callback_data: MasseurAction, st
     await callback.answer()
 
 
-@router.callback_query(MasseurActions.massage_edit_choice, MasseurEditField.filter())
+@router.callback_query(MasseurActions.massage_edit_choice, MasseurEditField.filter(F.field != "done"))
 async def masseur_edit_field(callback: CallbackQuery, callback_data: MasseurEditField, state: FSMContext):
     """Выбор поля для редактирования массажистом"""
     if not await ensure_masseur_access(callback, MASSEUR_ID):
@@ -91,10 +93,6 @@ async def masseur_edit_field(callback: CallbackQuery, callback_data: MasseurEdit
 
     field = callback_data.field
     record_id = callback_data.record_id
-
-    if field == "done":
-        await masseur_edit_done(callback, state)
-        return
 
     field_prompts = {
         "parent_name": ("Имя родителя", "Введите новое имя родителя:"),
@@ -177,15 +175,17 @@ async def masseur_process_edit_field(message: Message, state: FSMContext):
         if not is_valid:
             await message.answer("⚠️ Неверный формат даты. ДД.ММ.ГГГГ:", reply_markup=get_cancel_keyboard())
             return
-
-    elif field == "time":
-        from booking_rules import validate_time as vt
-        is_valid, normalized = vt(new_value)
-        if not is_valid:
-            await message.answer("⚠️ Неверный формат времени. ЧЧ:ММ:", reply_markup=get_cancel_keyboard())
-            return
-        new_value = normalized
-        field = "time"  # в таблице колонка time
+        # Сохраняем дату и запрашиваем время (двухшаговый ввод)
+        await state.update_data(masseur_new_date=new_value)
+        await delete_previous_messages(message.bot, state, message.chat.id)
+        sent = await message.answer(
+            text="📝 <b>Изменение: Дата и время</b>\n\nВведите новое время (ЧЧ:ММ):",
+            parse_mode="HTML",
+            reply_markup=get_cancel_keyboard()
+        )
+        await add_message_to_delete(state, sent.message_id)
+        await state.set_state(MasseurActions.massage_edit_time)
+        return
 
     # Обновляем в Google Sheets
     success = await update_booking(record_id, {field: new_value})
@@ -207,20 +207,77 @@ async def masseur_process_edit_field(message: Message, state: FSMContext):
     await state.set_state(MasseurActions.massage_edit_choice)
 
 
+@router.message(MasseurActions.massage_edit_time)
+async def masseur_process_edit_time(message: Message, state: FSMContext):
+    """Обработка ввода нового времени массажистом (2-й шаг после даты)"""
+    data = await state.get_data()
+    record_id = data.get('masseur_record_id')
+    new_date = data.get('masseur_new_date')
+
+    if not record_id or not new_date:
+        await message.answer("❌ Ошибка: потерян контекст редактирования. Начните заново.")
+        await state.clear()
+        return
+
+    from booking_rules import validate_time as vt
+    new_time = message.text.strip()
+    is_valid, normalized = vt(new_time)
+    if not is_valid:
+        await message.answer("⚠️ Неверный формат времени. ЧЧ:ММ:", reply_markup=get_cancel_keyboard())
+        return
+
+    # Обновляем дату и время в Google Sheets
+    success = await update_booking(record_id, {"date": new_date, "time": normalized})
+
+    await delete_previous_messages(message.bot, state, message.chat.id)
+
+    if success:
+        sent = await message.answer(
+            text=f"✅ Дата и время обновлены для записи #{record_id}: {new_date} {normalized}.",
+            reply_markup=get_masseur_edit_keyboard(record_id)
+        )
+    else:
+        sent = await message.answer(
+            text="❌ Ошибка при обновлении. Попробуйте позже.",
+            reply_markup=get_masseur_edit_keyboard(record_id)
+        )
+
+    await add_message_to_delete(state, sent.message_id)
+    await state.set_state(MasseurActions.massage_edit_choice)
+
+
 @router.callback_query(MasseurActions.massage_edit_choice, MasseurEditField.filter(F.field == "done"))
 async def masseur_edit_done(callback: CallbackQuery, state: FSMContext):
     """Завершение редактирования массажистом"""
     if not await ensure_masseur_access(callback, MASSEUR_ID):
         return
 
+    data = await state.get_data()
+    record_id = data.get('masseur_record_id')
+
     await delete_previous_messages(callback.bot, state, callback.message.chat.id)
     await delete_message_safe(callback.bot, callback.message.chat.id, callback.message.message_id)
 
     await state.clear()
 
-    sent = await callback.message.answer(
-        text="✅ Редактирование завершено.",
-        reply_markup=get_start_keyboard()
-    )
-    await add_message_to_delete(state, sent.message_id)
+    # Показываем обновлённую карточку записи с кнопками подтверждения/редактирования
+    from google_sheets import get_booking_by_record_number
+
+    booking = await get_booking_by_record_number(record_id) if record_id else None
+
+    if booking:
+        card = format_booking_card(booking, show_number=True, record_number=record_id)
+        sent = await callback.message.answer(
+            text=f"✅ <b>Редактирование завершено.</b>\n\n{card}",
+            parse_mode="HTML",
+            reply_markup=get_masseur_action_keyboard(record_id)
+        )
+    else:
+        sent = await callback.message.answer(
+            text="✅ Редактирование завершено.",
+            reply_markup=get_start_keyboard()
+        )
+
+    await state.update_data(masseur_record_id=record_id, messages_to_delete=[sent.message_id])
+    await state.set_state(MasseurActions.massage_confirm)
     await callback.answer()

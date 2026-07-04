@@ -591,3 +591,56 @@ async def get_user_id_by_record_number(record_number: int) -> Optional[int]:
         await asyncio.sleep(delay)
 
     return None
+def _get_booking_by_record_number_sync(record_number: int):
+    """Синхронно получает все поля записи по номеру. Возвращает dict или None."""
+    sheet = _sheet_cache.get()
+    if sheet is None:
+        creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
+        client = gspread.authorize(creds)
+        spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        try:
+            sheet = spreadsheet.worksheet(GOOGLE_SHEET_NAME)
+        except gspread.WorksheetNotFound:
+            sheet = spreadsheet.sheet1
+        _sheet_cache.set(sheet)
+
+    try:
+        all_values = sheet.get_all_values()
+        for row in all_values[1:]:  # пропускаем заголовок
+            if row and len(row) >= 9 and row[0] == str(record_number):
+                def g(i):
+                    return row[i] if len(row) > i else ""
+                return {
+                    "parent_name": g(2),
+                    "child_name": g(3),
+                    "child_age": g(4),
+                    "massage_type": g(5),
+                    "date": g(6),
+                    "time": g(7),
+                    "comment": g(8),
+                    "user_id": g(9),
+                }
+        return None
+    except Exception as e:
+        logger.error(f"❌ Ошибка при получении записи #{record_number}: {e}")
+        traceback.print_exc()
+        return None
+
+
+async def get_booking_by_record_number(record_number: int):
+    """Асинхронно получает все поля записи по номеру с retry логикой."""
+    for attempt in range(GOOGLE_SHEETS_MAX_RETRIES):
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(_get_booking_by_record_number_sync, record_number),
+                timeout=GOOGLE_SHEETS_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"⏱ Таймаут get_booking на попытке {attempt + 1}/{GOOGLE_SHEETS_MAX_RETRIES}")
+        except Exception as e:
+            logger.warning(f"⚠️ get_booking попытка {attempt + 1}/{GOOGLE_SHEETS_MAX_RETRIES} ошибка: {e}")
+
+        if attempt == GOOGLE_SHEETS_MAX_RETRIES - 1:
+            logger.error(f"❌ get_booking: все попытки исчерпаны для #{record_number}")
+            return None
+        await asyncio.sleep(GOOGLE_SHEETS_RETRY_DELAY * (2 ** attempt))

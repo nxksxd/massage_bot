@@ -17,6 +17,7 @@ from booking_rules import (
 )
 from keyboards import (
     get_start_keyboard,
+    get_masseur_action_keyboard,
     get_massage_types_keyboard,
     get_confirm_keyboard,
     get_edit_keyboard,
@@ -395,7 +396,8 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext):
             await callback.bot.send_message(
                 chat_id=MASSEUR_ID,
                 text=masseur_text,
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_markup=get_masseur_action_keyboard(record_number)
             )
         except Exception as e:
             import logging
